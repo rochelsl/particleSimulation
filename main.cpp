@@ -30,23 +30,36 @@ struct Particle {
     float radius;
 };
 
-void handleWallCollision(Particle& p, const sf::Vector2u& size) {
-    if (p.position.x - p.radius < 0.f) {
-        p.position.x = p.radius;
-        p.velocity.x *= -1.f;
-    } else if (p.position.x + p.radius > size.x) {
-        p.position.x = size.x - p.radius;
-        p.velocity.x *= -1.f;
-    }
+//random magnetization vector orientation initialization
+sf::Vector2f randomUnitVector(std::mt19937& rng) {
+    std::uniform_real_distribution<float> angleDist(0.f, 2.f * PI);
 
-    if (p.position.y - p.radius < 0.f) {
-        p.position.y = p.radius;
-        p.velocity.y *= -1.f;
-    } else if (p.position.y + p.radius > size.y) {
-        p.position.y = size.y - p.radius;
-        p.velocity.y *= -1.f;
-    }
+    float theta = angleDist(rng);
+
+    return {
+        std::cos(theta),
+        std::sin(theta)
+    };
 }
+
+// OBSELETE NOW THAT THE PBC IS INCLUDED
+// void handleWallCollision(Particle& p, const sf::Vector2u& size) {
+//     if (p.position.x - p.radius < 0.f) {
+//         p.position.x = p.radius;
+//         p.velocity.x *= -1.f;
+//     } else if (p.position.x + p.radius > size.x) {
+//         p.position.x = size.x - p.radius;
+//         p.velocity.x *= -1.f;
+//     }
+
+//     if (p.position.y - p.radius < 0.f) {
+//         p.position.y = p.radius;
+//         p.velocity.y *= -1.f;
+//     } else if (p.position.y + p.radius > size.y) {
+//         p.position.y = size.y - p.radius;
+//         p.velocity.y *= -1.f;
+//     }
+// }
 
 void applyPBC(sf::Vector2f& pos, float w, float h) {
     pos.x = std::fmod(pos.x, w);
@@ -202,7 +215,7 @@ int main() {
 
     std::vector<Particle> particles;
 
-    const int N = 40000;
+    const int N = 1000;
     particles.reserve(N);
 
     std::mt19937 rng(std::random_device{}());
@@ -220,10 +233,11 @@ int main() {
         int iy = i / cols;
 
         Particle p;
-        p.radius = 2.f;
+        p.radius = 5.f;
         p.position = {(ix + 0.5f) * dx + jitter(rng), (iy + 0.5f) * dy + jitter(rng)};
         p.velocity = {vel(rng), vel(rng)};
         p.acceleration = {0.f, 0.f};
+        p.magneticMoment = randomUnitVector(rng); //magnetization vector
         particles.push_back(p);
     }
 
@@ -277,7 +291,15 @@ int main() {
             shape.setOrigin({p.radius, p.radius});
             shape.setPosition(p.position);
             window.draw(shape);
+
+            // Draw the magnetization axis
+            sf::Vertex line[] = {
+            sf::Vertex(p.position, sf::Color::Red),
+            sf::Vertex(p.position + p.magneticMoment * p.radius * 2.0f, sf::Color::Red)
+        };
+        window.draw(line, 2, sf::Lines);
         }
+
         window.display();
 
         //For radial distribution function
