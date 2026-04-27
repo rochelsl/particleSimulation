@@ -1,7 +1,10 @@
 #include <SFML/Graphics.hpp> 
+#include <iostream>
 #include <vector>
 #include <random>
 #include <cmath>
+
+constexpr float PI = 3.14159265359f;
 
 //Window size
 const int width = 1920;
@@ -10,7 +13,7 @@ const int height = 1080;
 //Initialize parameters for LJ-potential, cutoff and grid-calculations
 const float epsilon = 1.0f;
 const float sigma = 10.0f;
-const float rc = 2.5f * sigma;
+const float rc = 1.0f * sigma;
 const float rc2 = rc * rc;
 
 //For grid list, performance boost
@@ -23,6 +26,7 @@ struct Particle {
     sf::Vector2f position;
     sf::Vector2f velocity;
     sf::Vector2f acceleration;
+    sf::Vector2f magneticMoment;
     float radius;
 };
 
@@ -146,18 +150,64 @@ void integrate(std::vector<Particle>& particles, float dt) {
     }
 }
 
+std::vector<float> computeRadialDistribution(
+    const std::vector<Particle>& particles,
+    float width,
+    float height,
+    int bins,
+    float rMax
+) {
+    std::vector<float> hist(bins, 0.f);
+
+    const int N = static_cast<int>(particles.size());
+    const float dr = rMax / bins;
+    const float area = width * height;
+    const float rho = N / area;
+
+    for (int i = 0; i < N; ++i) {
+        for (int j = i + 1; j < N; ++j) {
+            sf::Vector2f r = particles[j].position - particles[i].position;
+            r = minimumImage(r, width, height);
+
+            float dist = std::sqrt(r.x * r.x + r.y * r.y);
+
+            if (dist < rMax) {
+                int bin = static_cast<int>(dist / dr);
+                hist[bin] += 2.f; // count both i-j and j-i
+            }
+        }
+    }
+
+    std::vector<float> g(bins, 0.f);
+
+    for (int k = 0; k < bins; ++k) {
+        float rInner = k * dr;
+        float rOuter = rInner + dr;
+
+        float shellArea = static_cast<float>(M_PI) *
+                          (rOuter * rOuter - rInner * rInner);
+
+        float idealCount = N * rho * shellArea;
+
+        if (idealCount > 0.f)
+            g[k] = hist[k] / idealCount;
+    }
+
+    return g;
+}
+
 int main() { 
     auto window = sf::RenderWindow{{width, height}, "Particle Simulation"}; 
     window.setFramerateLimit(144); 
 
     std::vector<Particle> particles;
 
-    const int N = 10000;
+    const int N = 40000;
     particles.reserve(N);
 
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<float> jitter(-1.0f, 1.0f);
-    std::uniform_real_distribution<float> vel(-10.f, 10.f);
+    std::uniform_real_distribution<float> vel(-100.f, 100.f);
 
     // Grid initialization avoids catastrophic LJ overlaps from random placement.
     int cols = static_cast<int>(std::ceil(std::sqrt(N * static_cast<float>(width) / height)));
@@ -186,6 +236,15 @@ int main() {
     //sf::Clock clock;
     //float dt = clock.restart().asSeconds();
     const float dt = 0.001f;
+
+    //For radial distribution function
+    // int frameCounter = 0;
+    // std::vector<float> gr;
+    // const int grBins = 200;
+    // const float rMax = std::min(width, height) * 0.5f;
+
+    // std::vector<float> grAverage(grBins, 0.f);
+    // int grSamples = 0;
 
     while (window.isOpen()) { 
 
@@ -220,5 +279,25 @@ int main() {
             window.draw(shape);
         }
         window.display();
+
+        //For radial distribution function
+        // frameCounter++;
+        // if (frameCounter % 30 == 0) {
+        //     auto currentGR = computeRadialDistribution(particles, width, height, grBins, rMax);
+
+        //     for (int i = 0; i < grBins; ++i) {
+        //         grAverage[i] += currentGR[i];
+        //         float value = grAverage[i] / grSamples;
+        //     }
+
+        //     grSamples++;
+
+        //     if (frameCounter % 300 == 0 && !gr.empty()) {
+        //         for (int i = 0; i < 10; ++i) {
+        //             std::cout << i << " " << gr[i] << "\n";
+        //         }
+        //         std::cout << "----\n";
+        //     }
+        // }
     }
 } 
