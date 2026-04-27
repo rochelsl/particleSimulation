@@ -30,8 +30,15 @@ void handleWallCollision(Particle& p, const sf::Vector2u& size) {
 void computeForces(std::vector<Particle>& particles) {
     const float epsilon = 1.0f;
     const float sigma = 10.0f;
-    const float cutoff = 2.5f * sigma;
-    const float cutoff2 = cutoff * cutoff;
+    const float rc = 2.5f * sigma;
+    const float rc2 = rc * rc;
+
+    float inv_rc2 = 1.f / rc2;
+    float inv_rc6 = inv_rc2 * inv_rc2 * inv_rc2;
+    float inv_rc12 = inv_rc6 * inv_rc6;
+
+    // force at cutoff
+    float f_shift = 24.f * epsilon * inv_rc2 * (2.f * inv_rc12 - inv_rc6);
 
     // reset accelerations
     for (auto& p : particles)
@@ -45,17 +52,19 @@ void computeForces(std::vector<Particle>& particles) {
             sf::Vector2f r = p2.position - p1.position;
             float r2 = r.x*r.x + r.y*r.y;
 
-            if (r2 > cutoff2 || r2 < 1e-6f)
+            if (r2 > rc2 || r2 < 1e-6f)
                 continue;
 
             float inv_r2 = 1.f / r2;
             float inv_r6 = inv_r2 * inv_r2 * inv_r2;
             float inv_r12 = inv_r6 * inv_r6;
 
-            float forceScalar = 24.f * epsilon * inv_r2 *
-                (2.f * inv_r12 - inv_r6);
+            float f = 24.f * epsilon * inv_r2 * (2.f * inv_r12 - inv_r6);
 
-            sf::Vector2f force = r * forceScalar;
+            // subtract cutoff force
+            f -= f_shift;
+
+            sf::Vector2f force = r * f;
 
             // Newton's 3rd law
             p1.acceleration -= force;
