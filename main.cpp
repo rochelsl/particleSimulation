@@ -16,9 +16,18 @@ const float sigma = 10.0f;
 const float rc = 1.0f * sigma;
 const float rc2 = rc * rc;
 //dipole strength
-const float dipoleStrength = 10000.0f;
+const float dipoleStrength = 100.0f;
 std::uniform_real_distribution<float> angleDist(0.f, 2.f * PI);
-const float rotationalDamping = 0.99999; // To decrease probability of numerical explosion
+const float rotationalDamping = 0.999; // To decrease probability of numerical explosion
+//Background field
+sf::Vector2f normalize(sf::Vector2f v) {
+    float len = std::sqrt(v.x * v.x + v.y * v.y);
+    if (len < 1e-8f)
+        return {0.f, 0.f};
+    return v / len;
+}
+const sf::Vector2f externalFieldDirection = normalize({1.0f, 0.2f});
+const float externalFieldStrength = 100.0f;
 
 //For grid list, performance boost
 float cellSize = rc;
@@ -208,6 +217,12 @@ void computeForces(std::vector<Particle>& particles) {
                             sf::Vector2f B_on_2 = dipoleField( r, p1.magneticMoment, dipoleStrength);
                             float torque1 = cross2D(p1.magneticMoment, B_on_1);
                             float torque2 = cross2D(p2.magneticMoment, B_on_2);
+                            //Background magnetic field
+                            sf::Vector2f B_ext = externalFieldStrength * externalFieldDirection;
+                            for (auto& p : particles) {
+                                float externalTorque = cross2D(p.magneticMoment, B_ext);
+                                p.angularAcceleration += externalTorque;
+                            }
                             p1.angularAcceleration += torque1; //This assumed moment of inertia = 1: angularAcceleration += torque / 1
                             p2.angularAcceleration += torque2;
 
@@ -344,7 +359,7 @@ int main() {
         p.acceleration = {0.f, 0.f};
         p.magneticMoment = randomUnitVector(rng); //magnetization vector
         p.angle = angleDist(rng);
-        p.angularVelocity = 0.f;
+        p.angularVelocity = 10.f;
         p.angularAcceleration = 0.f;
         p.magneticMoment = momentFromAngle(p.angle);
         particles.push_back(p);
@@ -413,6 +428,13 @@ int main() {
         };
         window.draw(line, 2, sf::Lines);
         }
+
+        // sf::Vertex fieldLine[] = {
+        //     sf::Vertex({50.f, 50.f}, sf::Color::Blue),
+        //     sf::Vertex({50.f, 50.f} + externalFieldDirection * 80.f, sf::Color::Blue)
+        // };
+
+        // window.draw(fieldLine, 2, sf::Lines);
 
         window.display();
 
