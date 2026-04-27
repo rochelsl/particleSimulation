@@ -27,6 +27,24 @@ void handleWallCollision(Particle& p, const sf::Vector2u& size) {
     }
 }
 
+void applyPBC(sf::Vector2f& pos, float width, float height) {
+    if (pos.x < 0.f) pos.x += width;
+    if (pos.x >= width) pos.x -= width;
+
+    if (pos.y < 0.f) pos.y += height;
+    if (pos.y >= height) pos.y -= height;
+}
+
+sf::Vector2f minimumImage(sf::Vector2f r, float width, float height) {
+    if (r.x >  width / 2.f) r.x -= width;
+    if (r.x < -width / 2.f) r.x += width;
+
+    if (r.y >  height / 2.f) r.y -= height;
+    if (r.y < -height / 2.f) r.y += height;
+
+    return r;
+}
+
 void computeForces(std::vector<Particle>& particles) {
     const float epsilon = 1.0f;
     const float sigma = 10.0f;
@@ -50,6 +68,7 @@ void computeForces(std::vector<Particle>& particles) {
             auto& p2 = particles[j];
 
             sf::Vector2f r = p2.position - p1.position;
+            r = minimumImage(r, 1920, 1080);
             float r2 = r.x*r.x + r.y*r.y;
 
             if (r2 > rc2 || r2 < 1e-6f)
@@ -115,9 +134,12 @@ int main() {
         // 3. finish velocity update
         for (auto& p : particles)
             p.velocity += 0.5f * p.acceleration * dt;
-        // 4. walls (still needed)
+        // 4. walls
+        // for (auto& p : particles)
+        //     handleWallCollision(p, window.getSize());
+        // 4. PBC
         for (auto& p : particles)
-            handleWallCollision(p, window.getSize());
+            applyPBC(p.position, 1920, 1080);
 
         for (auto event = sf::Event{}; window.pollEvent(event);) { 
             if (event.type == sf::Event::Closed) { 
