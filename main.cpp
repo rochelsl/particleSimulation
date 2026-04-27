@@ -5,6 +5,7 @@
 struct Particle {
     sf::Vector2f position;
     sf::Vector2f velocity;
+    sf::Vector2f acceleration;
     float radius;
 };
 
@@ -26,6 +27,50 @@ void handleWallCollision(Particle& p, const sf::Vector2u& size) {
     }
 }
 
+void computeForces(std::vector<Particle>& particles) {
+    const float epsilon = 1.0f;
+    const float sigma = 10.0f;
+    const float cutoff = 2.5f * sigma;
+    const float cutoff2 = cutoff * cutoff;
+
+    // reset accelerations
+    for (auto& p : particles)
+        p.acceleration = {0.f, 0.f};
+
+    for (size_t i = 0; i < particles.size(); ++i) {
+        for (size_t j = i + 1; j < particles.size(); ++j) {
+            auto& p1 = particles[i];
+            auto& p2 = particles[j];
+
+            sf::Vector2f r = p2.position - p1.position;
+            float r2 = r.x*r.x + r.y*r.y;
+
+            if (r2 > cutoff2 || r2 < 1e-6f)
+                continue;
+
+            float inv_r2 = 1.f / r2;
+            float inv_r6 = inv_r2 * inv_r2 * inv_r2;
+            float inv_r12 = inv_r6 * inv_r6;
+
+            float forceScalar = 24.f * epsilon * inv_r2 *
+                (2.f * inv_r12 - inv_r6);
+
+            sf::Vector2f force = r * forceScalar;
+
+            // Newton's 3rd law
+            p1.acceleration -= force;
+            p2.acceleration += force;
+        }
+    }
+}
+
+void integrate(std::vector<Particle>& particles, float dt) {
+    for (auto& p : particles) {
+        p.position += p.velocity * dt + 0.5f * p.acceleration * dt * dt;
+        p.velocity += 0.5f * p.acceleration * dt;
+    }
+}
+
 int main() { 
     auto window = sf::RenderWindow{{1920u, 1080u}, "Particle Simulation"}; 
     window.setFramerateLimit(144); 
@@ -34,13 +79,13 @@ int main() {
     std::vector<Particle> particles;
 
     std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> posX(0.f, 1920.f);
-    std::uniform_real_distribution<float> posY(0.f, 1080.f);
+    std::uniform_real_distribution<float> posX(50.f, 1880.f);
+    std::uniform_real_distribution<float> posY(50.f, 1030.f);
     std::uniform_real_distribution<float> vel(-100.f, 100.f);
 
-    for (int i = 0; i < 2000; ++i) {
+    for (int i = 0; i < 1000; ++i) {
         Particle p;
-        p.radius = 1.f;
+        p.radius = 3.f;
         p.position = {posX(rng), posY(rng)};
         p.velocity = {vel(rng), vel(rng)};
         particles.push_back(p);
@@ -52,7 +97,19 @@ int main() {
     sf::Clock clock;
 
     while (window.isOpen()) { 
-        float dt = clock.restart().asSeconds();
+        //float dt = clock.restart().asSeconds();
+        const float dt = 0.005f;
+        // 1. integrate positions + half velocity
+        integrate(particles, dt);
+        // 2. recompute forces
+        computeForces(particles);
+        // 3. finish velocity update
+        for (auto& p : particles)
+            p.velocity += 0.5f * p.acceleration * dt;
+        // 4. walls (still needed)
+        for (auto& p : particles)
+            handleWallCollision(p, window.getSize());
+
         for (auto event = sf::Event{}; window.pollEvent(event);) { 
             if (event.type == sf::Event::Closed) { 
                 window.close(); 
@@ -62,10 +119,6 @@ int main() {
 					window.close();
 				}
 			}
-        }
-        for (auto& p : particles) {
-            p.position += p.velocity * dt;
-            handleWallCollision(p, window.getSize());
         }
 
         window.clear();
