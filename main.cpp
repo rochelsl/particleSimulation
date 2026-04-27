@@ -16,7 +16,9 @@ const float sigma = 10.0f;
 const float rc = 1.0f * sigma;
 const float rc2 = rc * rc;
 //dipole strength
-const float dipoleStrength = 0.01f;
+const float dipoleStrength = 10000.0f;
+std::uniform_real_distribution<float> angleDist(0.f, 2.f * PI);
+const float rotationalDamping = 0.99999; // To decrease probability of numerical explosion
 
 //For grid list, performance boost
 float cellSize = rc;
@@ -28,7 +30,12 @@ struct Particle {
     sf::Vector2f position;
     sf::Vector2f velocity;
     sf::Vector2f acceleration;
+
     sf::Vector2f magneticMoment;
+    float angle;
+    float angularVelocity;
+    float angularAcceleration;
+
     float radius;
 };
 
@@ -46,6 +53,15 @@ sf::Vector2f randomUnitVector(std::mt19937& rng) {
 //For the dot product in the dipolar interaction
 float dot(sf::Vector2f a, sf::Vector2f b) {
     return a.x * b.x + a.y * b.y;
+}
+
+//For the vector product
+float cross2D(sf::Vector2f a, sf::Vector2f b) {
+    return a.x * b.y - a.y * b.x;
+}
+
+sf::Vector2f momentFromAngle(float angle) {
+    return {std::cos(angle), std::sin(angle)};
 }
 
 sf::Vector2f computeDipoleForceOnP2(
@@ -75,6 +91,26 @@ sf::Vector2f computeDipoleForceOnP2(
         5.f * mu1_dot_r * mu2_dot_r * rHat;
 
     return prefactor * bracket; // force on particle 2
+}
+
+sf::Vector2f dipoleField(
+    sf::Vector2f r,
+    sf::Vector2f mu,
+    float dipoleStrength
+) {
+    float r2 = dot(r, r);
+
+    if (r2 < 1e-6f)
+        return {0.f, 0.f};
+
+    float dist = std::sqrt(r2);
+    sf::Vector2f rHat = r / dist;
+
+    float muDotR = dot(mu, rHat);
+
+    return dipoleStrength *
+           (3.f * muDotR * rHat - mu) /
+           (dist * dist * dist);
 }
 
 // OBSELETE NOW THAT THE PBC IS INCLUDED
@@ -133,6 +169,7 @@ void computeForces(std::vector<Particle>& particles) {
     // Reset accelerations and wrap positions before cell assignment.
     for (auto& p : particles) {
         p.acceleration = {0.f, 0.f};
+        p.angularAcceleration = 0.f; //magnetic moment angular acceleration
         applyPBC(p.position, width, height);
     }
 
@@ -165,6 +202,14 @@ void computeForces(std::vector<Particle>& particles) {
 
                             sf::Vector2f r = p2.position - p1.position;
                             r = minimumImage(r, width, height);
+
+                            //For magnetization vector
+                            sf::Vector2f B_on_1 = dipoleField(-r, p2.magneticMoment, dipoleStrength);
+                            sf::Vector2f B_on_2 = dipoleField( r, p1.magneticMoment, dipoleStrength);
+                            float torque1 = cross2D(p1.magneticMoment, B_on_1);
+                            float torque2 = cross2D(p2.magneticMoment, B_on_2);
+                            p1.angularAcceleration += torque1; //This assumed moment of inertia = 1: angularAcceleration += torque / 1
+                            p2.angularAcceleration += torque2;
 
                             float r2 = r.x * r.x + r.y * r.y;
                             if (r2 > rc2 || r2 < 1e-6f) continue;
@@ -200,11 +245,26 @@ void computeForces(std::vector<Particle>& particles) {
     }
 }
 
+//Without magnetization vector rotational integration
+// void integrate(std::vector<Particle>& particles, float dt) {
+//     for (auto& p : particles) {
+//         p.position += p.velocity * dt + 0.5f * p.acceleration * dt * dt;
+//         applyPBC(p.position, width, height);
+//         p.velocity += 0.5f * p.acceleration * dt;
+//     }
+// }
+
 void integrate(std::vector<Particle>& particles, float dt) {
     for (auto& p : particles) {
         p.position += p.velocity * dt + 0.5f * p.acceleration * dt * dt;
-        applyPBC(p.position, width, height);
         p.velocity += 0.5f * p.acceleration * dt;
+
+        p.angle += p.angularVelocity * dt
+                 + 0.5f * p.angularAcceleration * dt * dt;
+
+        p.angularVelocity += 0.5f * p.angularAcceleration * dt;
+
+        p.magneticMoment = momentFromAngle(p.angle);
     }
 }
 
@@ -260,7 +320,7 @@ int main() {
 
     std::vector<Particle> particles;
 
-    const int N = 1000;
+    const int N = 100;
     particles.reserve(N);
 
     std::mt19937 rng(std::random_device{}());
@@ -278,11 +338,15 @@ int main() {
         int iy = i / cols;
 
         Particle p;
-        p.radius = 5.f;
+        p.radius = 10.f;
         p.position = {(ix + 0.5f) * dx + jitter(rng), (iy + 0.5f) * dy + jitter(rng)};
         p.velocity = {vel(rng), vel(rng)};
         p.acceleration = {0.f, 0.f};
         p.magneticMoment = randomUnitVector(rng); //magnetization vector
+        p.angle = angleDist(rng);
+        p.angularVelocity = 0.f;
+        p.angularAcceleration = 0.f;
+        p.magneticMoment = momentFromAngle(p.angle);
         particles.push_back(p);
     }
 
@@ -323,8 +387,13 @@ int main() {
         // 2. recompute forces
         computeForces(particles);
         // 3. finish velocity update
-        for (auto& p : particles)
+        for (auto& p : particles) {
             p.velocity += 0.5f * p.acceleration * dt;
+            // For magnetization vector
+            p.angularVelocity += 0.5f * p.angularAcceleration * dt;
+            p.angularVelocity *= rotationalDamping; //Include a damping
+            p.magneticMoment = momentFromAngle(p.angle);
+        }
         // 4. walls
         // for (auto& p : particles)
         //     handleWallCollision(p, window.getSize());
@@ -346,6 +415,10 @@ int main() {
         }
 
         window.display();
+
+        std::cout << particles[0].angle << " "
+          << particles[0].angularVelocity << " "
+          << particles[0].angularAcceleration << "\n";
 
         //For radial distribution function
         // frameCounter++;
