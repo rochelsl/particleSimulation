@@ -1,6 +1,23 @@
 #include <SFML/Graphics.hpp> 
 #include <vector>
 #include <random>
+#include <cmath>
+
+//Window size
+const int width = 1920;
+const int height = 1080;
+
+//Initialize parameters for LJ-potential, cutoff and grid-calculations
+const float epsilon = 1.0f;
+const float sigma = 10.0f;
+const float rc = 2.5f * sigma;
+const float rc2 = rc * rc;
+
+//For grid list, performance boost
+float cellSize = rc;
+int nx = static_cast<int>(width / cellSize);
+int ny = static_cast<int>(height / cellSize);
+std::vector<std::vector<std::vector<int>>> grid(nx, std::vector<std::vector<int>>(ny));
 
 struct Particle {
     sf::Vector2f position;
@@ -27,67 +44,96 @@ void handleWallCollision(Particle& p, const sf::Vector2u& size) {
     }
 }
 
-void applyPBC(sf::Vector2f& pos, float width, float height) {
-    if (pos.x < 0.f) pos.x += width;
-    if (pos.x >= width) pos.x -= width;
+void applyPBC(sf::Vector2f& pos, float w, float h) {
+    pos.x = std::fmod(pos.x, w);
+    pos.y = std::fmod(pos.y, h);
 
-    if (pos.y < 0.f) pos.y += height;
-    if (pos.y >= height) pos.y -= height;
+    if (pos.x < 0.f) pos.x += w;
+    if (pos.y < 0.f) pos.y += h;
 }
 
-sf::Vector2f minimumImage(sf::Vector2f r, float width, float height) {
-    if (r.x >  width / 2.f) r.x -= width;
-    if (r.x < -width / 2.f) r.x += width;
+sf::Vector2f minimumImage(sf::Vector2f r, float w, float h) {
+    if (r.x >  w / 2.f) r.x -= w;
+    if (r.x < -w / 2.f) r.x += w;
 
-    if (r.y >  height / 2.f) r.y -= height;
-    if (r.y < -height / 2.f) r.y += height;
+    if (r.y >  h / 2.f) r.y -= h;
+    if (r.y < -h / 2.f) r.y += h;
 
     return r;
 }
 
+int cellIndex(float x, int n, float L) {
+    x = std::fmod(x, L);
+    if (x < 0.f) x += L;
+
+    int c = static_cast<int>(x / cellSize);
+    if (c < 0) c = 0;
+    if (c >= n) c = n - 1;
+    return c;
+}
+
 void computeForces(std::vector<Particle>& particles) {
-    const float epsilon = 1.0f;
-    const float sigma = 10.0f;
-    const float rc = 2.5f * sigma;
-    const float rc2 = rc * rc;
+    // Clear grid at the beginning, not at the end.
+    for (auto& col : grid)
+        for (auto& cell : col)
+            cell.clear();
 
-    float inv_rc2 = 1.f / rc2;
-    float inv_rc6 = inv_rc2 * inv_rc2 * inv_rc2;
-    float inv_rc12 = inv_rc6 * inv_rc6;
-
-    // force at cutoff
-    float f_shift = 24.f * epsilon * inv_rc2 * (2.f * inv_rc12 - inv_rc6);
-
-    // reset accelerations
-    for (auto& p : particles)
+    // Reset accelerations and wrap positions before cell assignment.
+    for (auto& p : particles) {
         p.acceleration = {0.f, 0.f};
+        applyPBC(p.position, width, height);
+    }
 
-    for (size_t i = 0; i < particles.size(); ++i) {
-        for (size_t j = i + 1; j < particles.size(); ++j) {
-            auto& p1 = particles[i];
-            auto& p2 = particles[j];
+    // Assign particles to cells.
+    for (int i = 0; i < static_cast<int>(particles.size()); ++i) {
+        int cx = cellIndex(particles[i].position.x, nx, width);
+        int cy = cellIndex(particles[i].position.y, ny, height);
+        grid[cx][cy].push_back(i);
+    }
 
-            sf::Vector2f r = p2.position - p1.position;
-            r = minimumImage(r, 1920, 1080);
-            float r2 = r.x*r.x + r.y*r.y;
+    // Force-shifted LJ cutoff value. This is the scalar multiplying r.
+    const float sr2c = (sigma * sigma) / rc2;
+    const float sr6c = sr2c * sr2c * sr2c;
+    const float sr12c = sr6c * sr6c;
+    const float f_shift = 24.f * epsilon * (2.f * sr12c - sr6c) / rc2;
 
-            if (r2 > rc2 || r2 < 1e-6f)
-                continue;
+    for (int cx = 0; cx < nx; ++cx) {
+        for (int cy = 0; cy < ny; ++cy) {
+            for (int dx = -1; dx <= 1; ++dx) {
+                for (int dy = -1; dy <= 1; ++dy) {
+                    int cx2 = (cx + dx + nx) % nx;
+                    int cy2 = (cy + dy + ny) % ny;
 
-            float inv_r2 = 1.f / r2;
-            float inv_r6 = inv_r2 * inv_r2 * inv_r2;
-            float inv_r12 = inv_r6 * inv_r6;
+                    for (int i : grid[cx][cy]) {
+                        for (int j : grid[cx2][cy2]) {
+                            if (i >= j) continue;
 
-            float f = 24.f * epsilon * inv_r2 * (2.f * inv_r12 - inv_r6);
+                            Particle& p1 = particles[i];
+                            Particle& p2 = particles[j];
 
-            // subtract cutoff force
-            f -= f_shift;
+                            sf::Vector2f r = p2.position - p1.position;
+                            r = minimumImage(r, width, height);
 
-            sf::Vector2f force = r * f;
+                            float r2 = r.x * r.x + r.y * r.y;
+                            if (r2 > rc2 || r2 < 1e-6f) continue;
 
-            // Newton's 3rd law
-            p1.acceleration -= force;
-            p2.acceleration += force;
+                            float sr2 = (sigma * sigma) / r2;
+                            float sr6 = sr2 * sr2 * sr2;
+                            float sr12 = sr6 * sr6;
+
+                            // Scalar multiplying r-vector.
+                            float f = 24.f * epsilon * (2.f * sr12 - sr6) / r2;
+                            f -= f_shift;
+
+                            sf::Vector2f force = r * f;
+
+                            // mass = 1
+                            p1.acceleration -= force;
+                            p2.acceleration += force;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -95,51 +141,53 @@ void computeForces(std::vector<Particle>& particles) {
 void integrate(std::vector<Particle>& particles, float dt) {
     for (auto& p : particles) {
         p.position += p.velocity * dt + 0.5f * p.acceleration * dt * dt;
+        applyPBC(p.position, width, height);
         p.velocity += 0.5f * p.acceleration * dt;
     }
 }
 
 int main() { 
-    auto window = sf::RenderWindow{{1920u, 1080u}, "Particle Simulation"}; 
+    auto window = sf::RenderWindow{{width, height}, "Particle Simulation"}; 
     window.setFramerateLimit(144); 
 
-    //Initialize many particles at random positions
     std::vector<Particle> particles;
 
-    std::mt19937 rng(std::random_device{}());
-    std::uniform_real_distribution<float> posX(50.f, 1880.f);
-    std::uniform_real_distribution<float> posY(50.f, 1030.f);
-    std::uniform_real_distribution<float> vel(-100.f, 100.f);
+    const int N = 10000;
+    particles.reserve(N);
 
-    for (int i = 0; i < 1000; ++i) {
+    std::mt19937 rng(std::random_device{}());
+    std::uniform_real_distribution<float> jitter(-1.0f, 1.0f);
+    std::uniform_real_distribution<float> vel(-10.f, 10.f);
+
+    // Grid initialization avoids catastrophic LJ overlaps from random placement.
+    int cols = static_cast<int>(std::ceil(std::sqrt(N * static_cast<float>(width) / height)));
+    int rows = static_cast<int>(std::ceil(static_cast<float>(N) / cols));
+    float dx = static_cast<float>(width) / cols;
+    float dy = static_cast<float>(height) / rows;
+
+    for (int i = 0; i < N; ++i) {
+        int ix = i % cols;
+        int iy = i / cols;
+
         Particle p;
-        p.radius = 3.f;
-        p.position = {posX(rng), posY(rng)};
+        p.radius = 2.f;
+        p.position = {(ix + 0.5f) * dx + jitter(rng), (iy + 0.5f) * dy + jitter(rng)};
         p.velocity = {vel(rng), vel(rng)};
+        p.acceleration = {0.f, 0.f};
         particles.push_back(p);
     }
+
+    // Initial acceleration for velocity Verlet.
+    computeForces(particles);
 
     sf::CircleShape shape;
     shape.setFillColor(sf::Color::White);
 
-    sf::Clock clock;
+    //sf::Clock clock;
+    //float dt = clock.restart().asSeconds();
+    const float dt = 0.001f;
 
     while (window.isOpen()) { 
-        //float dt = clock.restart().asSeconds();
-        const float dt = 0.005f;
-        // 1. integrate positions + half velocity
-        integrate(particles, dt);
-        // 2. recompute forces
-        computeForces(particles);
-        // 3. finish velocity update
-        for (auto& p : particles)
-            p.velocity += 0.5f * p.acceleration * dt;
-        // 4. walls
-        // for (auto& p : particles)
-        //     handleWallCollision(p, window.getSize());
-        // 4. PBC
-        for (auto& p : particles)
-            applyPBC(p.position, 1920, 1080);
 
         for (auto event = sf::Event{}; window.pollEvent(event);) { 
             if (event.type == sf::Event::Closed) { 
@@ -152,6 +200,17 @@ int main() {
 			}
         }
 
+        // 1. integrate positions + half velocity
+        integrate(particles, dt);
+        // 2. recompute forces
+        computeForces(particles);
+        // 3. finish velocity update
+        for (auto& p : particles)
+            p.velocity += 0.5f * p.acceleration * dt;
+        // 4. walls
+        // for (auto& p : particles)
+        //     handleWallCollision(p, window.getSize());
+
         window.clear();
         //Collision with the wall check
         for (const auto& p : particles) {
@@ -159,50 +218,6 @@ int main() {
             shape.setOrigin({p.radius, p.radius});
             shape.setPosition(p.position);
             window.draw(shape);
-        }
-
-        //Collision with each other check
-        for (size_t i = 0; i < particles.size(); ++i) {
-            for (size_t j = i + 1; j < particles.size(); ++j) {
-                auto& p1 = particles[i];
-                auto& p2 = particles[j];
-
-                sf::Vector2f delta = p2.position - p1.position;
-                float dist2 = delta.x * delta.x + delta.y * delta.y;
-                float minDist = p1.radius + p2.radius;
-                if (dist2 < 1e-8f) continue;
-                if (dist2 < minDist * minDist) {
-                    float dist = std::sqrt(dist2);
-                    sf::Vector2f normal = delta / dist;
-
-                    // Overlap correction
-                    float percent = 0.8f;   // correction strength
-                    float slop = 0.01f;     // tolerance
-
-                    float overlap = std::max(minDist - dist - slop, 0.f);
-                    sf::Vector2f correction = normal * (percent * overlap * 0.5f);
-                    p1.position -= correction;
-                    p2.position += correction;
-
-                    // Relative velocity
-                    sf::Vector2f relVel = p2.velocity - p1.velocity;
-                    float velAlongNormal = relVel.x * normal.x + relVel.y * normal.y;
-
-                    //moving apart -> skip
-                    if (velAlongNormal > 0.f)
-                        continue;
-
-                    // Elastic response
-                    float j = -2.f * velAlongNormal / 2.f; // simplifies to -velAlongNormal
-
-                    sf::Vector2f impulse = j * normal;
-
-                    p1.velocity -= impulse;
-                    p2.velocity += impulse;
-
-
-                }
-            }
         }
         window.display();
     }
