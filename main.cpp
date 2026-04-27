@@ -15,6 +15,8 @@ const float epsilon = 1.0f;
 const float sigma = 10.0f;
 const float rc = 1.0f * sigma;
 const float rc2 = rc * rc;
+//dipole strength
+const float dipoleStrength = 0.01f;
 
 //For grid list, performance boost
 float cellSize = rc;
@@ -40,6 +42,39 @@ sf::Vector2f randomUnitVector(std::mt19937& rng) {
         std::cos(theta),
         std::sin(theta)
     };
+}
+//For the dot product in the dipolar interaction
+float dot(sf::Vector2f a, sf::Vector2f b) {
+    return a.x * b.x + a.y * b.y;
+}
+
+sf::Vector2f computeDipoleForceOnP2(
+    sf::Vector2f r,
+    sf::Vector2f mu1,
+    sf::Vector2f mu2,
+    float dipoleStrength
+) {
+    float r2 = dot(r, r);
+
+    if (r2 < 1e-6f)
+        return {0.f, 0.f};
+
+    float dist = std::sqrt(r2);
+    sf::Vector2f rHat = r / dist;
+
+    float mu1_dot_mu2 = dot(mu1, mu2);
+    float mu1_dot_r = dot(mu1, rHat);
+    float mu2_dot_r = dot(mu2, rHat);
+
+    float prefactor = 3.f * dipoleStrength / (dist * dist * dist * dist);
+
+    sf::Vector2f bracket =
+        mu1_dot_r * mu2 +
+        mu2_dot_r * mu1 +
+        mu1_dot_mu2 * rHat -
+        5.f * mu1_dot_r * mu2_dot_r * rHat;
+
+    return prefactor * bracket; // force on particle 2
 }
 
 // OBSELETE NOW THAT THE PBC IS INCLUDED
@@ -134,19 +169,29 @@ void computeForces(std::vector<Particle>& particles) {
                             float r2 = r.x * r.x + r.y * r.y;
                             if (r2 > rc2 || r2 < 1e-6f) continue;
 
-                            float sr2 = (sigma * sigma) / r2;
+                            // Lennard-Jones force
+                            float inv_r2 = 1.f / r2;
+                            float sr2 = (sigma * sigma) * inv_r2;
                             float sr6 = sr2 * sr2 * sr2;
                             float sr12 = sr6 * sr6;
 
-                            // Scalar multiplying r-vector.
-                            float f = 24.f * epsilon * (2.f * sr12 - sr6) / r2;
-                            f -= f_shift;
+                            float ljScalar = 24.f * epsilon * inv_r2 * (2.f * sr12 - sr6);
 
-                            sf::Vector2f force = r * f;
+                            sf::Vector2f ljForce = r * ljScalar;
 
-                            // mass = 1
-                            p1.acceleration -= force;
-                            p2.acceleration += force;
+                            // Dipolar force
+                            sf::Vector2f dipoleForce = computeDipoleForceOnP2(
+                                r,
+                                p1.magneticMoment,
+                                p2.magneticMoment,
+                                dipoleStrength
+                            );
+
+                            sf::Vector2f totalForce = ljForce + dipoleForce;
+
+                            // Newton's third law
+                            p1.acceleration -= totalForce;
+                            p2.acceleration += totalForce;
                         }
                     }
                 }
