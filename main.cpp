@@ -40,6 +40,7 @@ struct Particle {
     sf::Vector2f velocity;
     sf::Vector2f acceleration;
 
+    //magnetic moments
     sf::Vector2f magneticMoment;
     float angle;
     float angularVelocity;
@@ -201,7 +202,6 @@ void computeForces(std::vector<Particle>& particles) {
                 for (int dy = -1; dy <= 1; ++dy) {
                     int cx2 = (cx + dx + nx) % nx;
                     int cy2 = (cy + dy + ny) % ny;
-
                     for (int i : grid[cx][cy]) {
                         for (int j : grid[cx2][cy2]) {
                             if (i >= j) continue;
@@ -217,12 +217,7 @@ void computeForces(std::vector<Particle>& particles) {
                             sf::Vector2f B_on_2 = dipoleField( r, p1.magneticMoment, dipoleStrength);
                             float torque1 = cross2D(p1.magneticMoment, B_on_1);
                             float torque2 = cross2D(p2.magneticMoment, B_on_2);
-                            //Background magnetic field
-                            sf::Vector2f B_ext = externalFieldStrength * externalFieldDirection;
-                            for (auto& p : particles) {
-                                float externalTorque = cross2D(p.magneticMoment, B_ext);
-                                p.angularAcceleration += externalTorque;
-                            }
+
                             p1.angularAcceleration += torque1; //This assumed moment of inertia = 1: angularAcceleration += torque / 1
                             p2.angularAcceleration += torque2;
 
@@ -335,7 +330,7 @@ int main() {
 
     std::vector<Particle> particles;
 
-    const int N = 100;
+    const int N = 1000;
     particles.reserve(N);
 
     std::mt19937 rng(std::random_device{}());
@@ -353,7 +348,7 @@ int main() {
         int iy = i / cols;
 
         Particle p;
-        p.radius = 10.f;
+        p.radius = 5.f;
         p.position = {(ix + 0.5f) * dx + jitter(rng), (iy + 0.5f) * dy + jitter(rng)};
         p.velocity = {vel(rng), vel(rng)};
         p.acceleration = {0.f, 0.f};
@@ -408,6 +403,14 @@ int main() {
             p.angularVelocity += 0.5f * p.angularAcceleration * dt;
             p.angularVelocity *= rotationalDamping; //Include a damping
             p.magneticMoment = momentFromAngle(p.angle);
+            applyPBC(p.position, width, height);
+        }
+
+        //Background magnetic field
+        sf::Vector2f B_ext = externalFieldStrength * externalFieldDirection;
+        for (auto& p : particles) {
+            float externalTorque = cross2D(p.magneticMoment, B_ext);
+            p.angularAcceleration += externalTorque;
         }
         // 4. walls
         // for (auto& p : particles)
@@ -429,6 +432,15 @@ int main() {
         window.draw(line, 2, sf::Lines);
         }
 
+        sf::Vector2f origin(50.f, 50.f);
+
+        sf::Vertex fieldLine[] = {
+            sf::Vertex(origin, sf::Color::Blue),
+            sf::Vertex(origin + externalFieldDirection * 80.f, sf::Color::Blue)
+        };
+
+        window.draw(fieldLine, 2, sf::Lines);
+
         // sf::Vertex fieldLine[] = {
         //     sf::Vertex({50.f, 50.f}, sf::Color::Blue),
         //     sf::Vertex({50.f, 50.f} + externalFieldDirection * 80.f, sf::Color::Blue)
@@ -437,10 +449,6 @@ int main() {
         // window.draw(fieldLine, 2, sf::Lines);
 
         window.display();
-
-        std::cout << particles[0].angle << " "
-          << particles[0].angularVelocity << " "
-          << particles[0].angularAcceleration << "\n";
 
         //For radial distribution function
         // frameCounter++;
