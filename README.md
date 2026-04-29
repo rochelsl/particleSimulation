@@ -73,8 +73,11 @@ Depending on parameters, the system shows:
 * Compact clusters (dominant LJ attraction)
 * Dipolar chains (dominant dipole interaction + field)
 
-A simulation of 5000 magnetic particles (LJ epsilon = 0.05, sigma = 8.0, particle radius = 0.5 * sigma, external field = 10000 in horizontal direction, simulation time step = 0.01, Langevin parameters: mass of each particle = 0.5, moment of inertia = 0.5, gamma translation = 2.0, gamma rotation = 8.0, initial temperature = 10.0, final temperature = 2.0, cooling time = 20.0)
-<img width="2492" height="1406" alt="magnetic_particle_simulation_30_min_hor" src="https://github.com/user-attachments/assets/2f0ba8b9-6efc-4e91-8093-a3cd23a98e21" />
+A simulation of 5000 magnetic particles after 5 minutes and after 15 minutes (LJ epsilon = 0.5, sigma = 5.0, particle radius = 0.5 * sigma, external field = 10000 in horizontal direction, simulation time step = 0.01, Langevin parameters: mass of each particle = 1.0, moment of inertia = 1.0, gamma translation = 2.0, gamma rotation = 8.0, initial temperature = 50.0, final temperature = 5.0, cooling time = 20.0)
+<img width="1948" height="1146" alt="magnetic_particle_simulation_5_min" src="https://github.com/user-attachments/assets/253d1480-331f-4e6f-b2d5-45eabb377d24" />
+<img width="1948" height="1146" alt="magnetic_particle_simulation_15_min" src="https://github.com/user-attachments/assets/4a9a443f-f1b9-4821-98a0-b482b80a441d" />
+
+
 
 ## Key Parameters
 ### Temperature (T)
