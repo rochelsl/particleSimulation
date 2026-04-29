@@ -13,14 +13,29 @@ constexpr int height = 1080;
 
 // Lennard-Jones parameters.  Keep epsilon modest if you want field-aligned
 // dipolar chains rather than isotropic LJ droplets.
-constexpr float epsilon = 0.1f;
-constexpr float sigma   = 5.0f;
+constexpr float epsilon = 0.05f;
+constexpr float sigma   = 8.0f;
+
+// Visual and steric particle size. Keep the drawn diameter consistent with
+// the hard-core/contact distance used by the dynamics.
+constexpr float particleRadius = 0.5f * sigma;
+constexpr float contactDistance = 3.0f * particleRadius;
+constexpr float contactDistance2 = contactDistance * contactDistance;
+
+// Point dipoles have a singular 1/r^4 force. For finite particles, clamp the
+// dipolar force/torque distance at contact to avoid unphysical blow-ups.
+constexpr float dipoleSoftCoreDistance = contactDistance;
+
+// Optional safety cap. It prevents one rare close encounter from launching
+// particles through each other in a single time step.
+constexpr float maxPairForce = 50000.0f;
+
 constexpr float ljCutoff = 2.5f * sigma;
 constexpr float ljCutoff2 = ljCutoff * ljCutoff;
 
 // Dipolar interaction parameters.  The strength must be large enough that
 // |U_dd| near contact is several kBT; otherwise thermal noise breaks chains.
-constexpr float dipoleStrength = 4000.0f;
+constexpr float dipoleStrength = 5000.0f;
 constexpr float dipoleCutoff = 8.0f * sigma;
 constexpr float dipoleCutoff2 = dipoleCutoff * dipoleCutoff;
 
@@ -31,8 +46,8 @@ sf::Vector2f normalize(sf::Vector2f v);
 float length(sf::Vector2f v);
 sf::Vector2f externalFieldDirection = normalize({1.0f, 0.2f});
 float externalFieldStrength = 100.0f;
-constexpr float fieldStrengthPerPixel = 1.0f;
-constexpr float maxExternalFieldStrength = 1000.0f;
+constexpr float fieldStrengthPerPixel = 20.0f;
+constexpr float maxExternalFieldStrength = 10000.0f;
 constexpr float minDragLengthForField = 2.0f;
 
 // Langevin parameters, in reduced simulation units.
@@ -40,10 +55,10 @@ constexpr float minDragLengthForField = 2.0f;
 // Rotational Langevin:    I dw/dt = tau - gammaR w + sqrt(2 gammaR kBT I) eta(t)
 constexpr float mass = 0.5f;
 constexpr float momentOfInertia = 0.5f;
-constexpr float gammaT = 1.0f;
-constexpr float gammaR = 4.0f;
-constexpr float initialTemperature = 50.0f;
-constexpr float finalTemperature = 0.1f;
+constexpr float gammaT = 2.0f;
+constexpr float gammaR = 8.0f;
+constexpr float initialTemperature = 10.0f;
+constexpr float finalTemperature = 2.0f;
 constexpr float coolingTime = 20.0f;   // simulation time units
 
 // Cell-list parameters. The 3x3 neighbor search is valid when cellSize >= largest cutoff.
@@ -134,12 +149,14 @@ sf::Vector2f computeDipoleForceOnP2(
 
     const float dist = std::sqrt(r2);
     const sf::Vector2f rHat = r / dist;
+    const float effectiveDist = std::max(dist, dipoleSoftCoreDistance);
 
     const float mu1_dot_mu2 = dot(mu1, mu2);
     const float mu1_dot_r   = dot(mu1, rHat);
     const float mu2_dot_r   = dot(mu2, rHat);
 
-    const float prefactor = 3.f * strength / (dist * dist * dist * dist);
+    const float prefactor = 3.f * strength /
+        (effectiveDist * effectiveDist * effectiveDist * effectiveDist);
 
     const sf::Vector2f bracket =
         mu1_dot_r * mu2 +
@@ -156,9 +173,11 @@ sf::Vector2f dipoleField(sf::Vector2f r, sf::Vector2f mu, float strength) {
 
     const float dist = std::sqrt(r2);
     const sf::Vector2f rHat = r / dist;
+    const float effectiveDist = std::max(dist, dipoleSoftCoreDistance);
     const float muDotR = dot(mu, rHat);
 
-    return strength * (3.f * muDotR * rHat - mu) / (dist * dist * dist);
+    return strength * (3.f * muDotR * rHat - mu) /
+        (effectiveDist * effectiveDist * effectiveDist);
 }
 
 void computeForces(std::vector<Particle>& particles) {
@@ -360,7 +379,7 @@ int main() {
         const int iy = i / cols;
 
         Particle p;
-        p.radius = 3.f;
+        p.radius = particleRadius;
         p.position = {(ix + 0.5f) * dx + jitter(rng), (iy + 0.5f) * dy + jitter(rng)};
         p.velocity = initVelSigma * sf::Vector2f(normal(rng), normal(rng));
         p.angle = angleDist(rng);
@@ -444,7 +463,7 @@ int main() {
                 sf::Vertex(p.position, sf::Color::Red),
                 sf::Vertex(p.position + p.magneticMoment * p.radius * 2.0f, sf::Color::Red)
             };
-            window.draw(line, 2, sf::Lines);
+            window.draw(line, 5, sf::Lines);
         }
 
         // Field indicator in the upper-left corner. Its length shows the
@@ -452,10 +471,10 @@ int main() {
         const sf::Vector2f origin(50.f, 50.f);
         const float indicatorLength = 120.f * externalFieldStrength / maxExternalFieldStrength;
         const sf::Vertex fieldLine[] = {
-            sf::Vertex(origin, sf::Color::Blue),
-            sf::Vertex(origin + externalFieldDirection * indicatorLength, sf::Color::Blue)
+            sf::Vertex(origin, sf::Color::Yellow),
+            sf::Vertex(origin + externalFieldDirection * indicatorLength, sf::Color::Yellow)
         };
-        window.draw(fieldLine, 2, sf::Lines);
+        window.draw(fieldLine, 10, sf::Lines);
 
         // While dragging, draw the mouse gesture itself in green.
         if (isDraggingField) {
@@ -463,7 +482,7 @@ int main() {
                 sf::Vertex(fieldDragStart, sf::Color::Green),
                 sf::Vertex(fieldDragCurrent, sf::Color::Green)
             };
-            window.draw(dragLine, 2, sf::Lines);
+            window.draw(dragLine, 10, sf::Lines);
         }
 
         window.display();
