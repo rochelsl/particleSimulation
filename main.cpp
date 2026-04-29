@@ -53,8 +53,6 @@ const float externalFieldStrength = 100.0f;
 
 //for temperature and Langevin behavior
 const float temperature = 0.2f;
-const float gamma = 0.5f;
-const float gammaRot = 0.5f;
 const float mass = 1.0f;
 
 //For grid list, performance boost
@@ -252,15 +250,7 @@ void computeForces(std::vector<Particle>& particles) {
                             sf::Vector2f B_on_2 = dipoleField( r, p1.magneticMoment, dipoleStrength);
                             float torque1 = cross2D(p1.magneticMoment, B_on_1);
                             float torque2 = cross2D(p2.magneticMoment, B_on_2);
-                            //Background magnetic field
-                            sf::Vector2f B_ext = externalFieldStrength * externalFieldDirection;
-                            for (auto& p : particles) {
-                                float externalTorque = cross2D(p.magneticMoment, B_ext);
-                                //magnetic field only
-                                //p.angularAcceleration += externalTorque;
-                                //magnetic field and temperature
-                                p.angularAcceleration += externalTorque / p.momentOfInertia;
-                            }
+
                             //p1.angularAcceleration += torque1; //This assumed moment of inertia = 1: angularAcceleration += torque / 1
                             //p2.angularAcceleration += torque2;
                             p1.angularAcceleration += torque1 / p1.momentOfInertia;
@@ -450,7 +440,7 @@ int main() {
 
     std::vector<Particle> particles;
 
-    const int N = 5;
+    const int N = 100;
     particles.reserve(N);
 
     std::mt19937 rng(std::random_device{}());
@@ -474,11 +464,15 @@ int main() {
         Particle p;
         p.radius = radiusPixels;
         p.position = {(ix + 0.5f) * dx + jitter(rng), (iy + 0.5f) * dy + jitter(rng)};
+        //temperature and Langevin behavior
+        p.mass = mass;
+        p.momentOfInertia = 0.5f * p.mass * p.radius * p.radius;
         //for random distribution of velocities
         //p.velocity = {vel(rng), vel(rng)};
         //p.acceleration = {0.f, 0.f};
         //for temperature and Langevin
         p.velocity = {velDist(rng), velDist(rng)};
+        p.acceleration = {0.f, 0.f};
         //magnetic moment
         p.magneticMoment = randomUnitVector(rng); //magnetization vector
         p.angle = angleDist(rng);
@@ -492,8 +486,8 @@ int main() {
         p.angularVelocity = omegaDist(rng);
         p.angularAcceleration = 0.f;
         p.magneticMoment = momentFromAngle(p.angle);
-        //temperature and Langevin behavior
-        p.momentOfInertia = 0.5f * p.mass * p.radius * p.radius;
+        p.force = {0.f, 0.f};
+        p.torque = 0.f;
         particles.push_back(p);
     }
 
@@ -529,11 +523,15 @@ int main() {
 			}
         }
 
-        // 1. integrate positions + half velocity
-        integrate(particles, dt);
+        // 1. integrate positions + half velocity (Verlet, deactivated when Brownian is used)
+        //integrate(particles, dt);
         // 2. recompute forces
         computeForces(particles);
         // 3. finish velocity update
+
+        brownianStep(particles, dt, rng);
+        brownianRotationStep(particles, dt, rng);
+
         for (auto& p : particles) {
             p.velocity += 0.5f * p.acceleration * dt;
             p.angularVelocity += 0.5f * p.angularAcceleration * dt;
@@ -543,7 +541,17 @@ int main() {
             applyPBC(p.position, width, height);
         }
 
-        applyLangevinThermostat(particles, dt, temperature, gamma, rng);
+        //Background magnetic field
+        sf::Vector2f B_ext = externalFieldStrength * externalFieldDirection;
+        for (auto& p : particles) {
+            float externalTorque = cross2D(p.magneticMoment, B_ext);
+            //magnetic field only
+            //p.angularAcceleration += externalTorque;
+            //magnetic field and temperature
+            p.angularAcceleration += externalTorque / p.momentOfInertia;
+        }
+
+        applyLangevinThermostat(particles, dt, temperature, gammaTrans, rng);
         applyRotationalLangevinThermostat(particles, dt, temperature, gammaRot, rng);
         // 4. walls
         // for (auto& p : particles)
