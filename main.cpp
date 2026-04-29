@@ -450,7 +450,7 @@ int main() {
 
     std::vector<Particle> particles;
 
-    const int N = 1000;
+    const int N = 5;
     particles.reserve(N);
 
     std::mt19937 rng(std::random_device{}());
