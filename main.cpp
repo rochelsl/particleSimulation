@@ -11,27 +11,34 @@ constexpr float PI = 3.14159265358979323846f;
 constexpr int width  = 1920;
 constexpr int height = 1080;
 
-// Lennard-Jones parameters
-constexpr float epsilon = 1.0f;
+// Lennard-Jones parameters.  Keep epsilon modest if you want field-aligned
+// dipolar chains rather than isotropic LJ droplets.
+constexpr float epsilon = 0.5f;
 constexpr float sigma   = 10.0f;
-constexpr float ljCutoff = 2.5f * sigma;      // 1.0*sigma removes nearly all LJ attraction
+constexpr float ljCutoff = 2.5f * sigma;
 constexpr float ljCutoff2 = ljCutoff * ljCutoff;
 
-// Dipolar interaction parameters
-constexpr float dipoleStrength = 100.0f;
-constexpr float dipoleCutoff = 6.0f * sigma;  // finite cutoff for the otherwise long-ranged dipole force
+// Dipolar interaction parameters.  The strength must be large enough that
+// |U_dd| near contact is several kBT; otherwise thermal noise breaks chains.
+constexpr float dipoleStrength = 3000.0f;
+constexpr float dipoleCutoff = 8.0f * sigma;
 constexpr float dipoleCutoff2 = dipoleCutoff * dipoleCutoff;
-constexpr float rotationalDamping = 0.999f;
 
-sf::Vector2f normalize(sf::Vector2f v) {
-    const float len = std::sqrt(v.x * v.x + v.y * v.y);
-    if (len < 1e-8f) return {0.f, 0.f};
-    return v / len;
-}
+// External magnetic field
+sf::Vector2f normalize(sf::Vector2f v);
+const sf::Vector2f externalFieldDirection = normalize({1.0f, 0.0f});
+constexpr float externalFieldStrength = 1000.0f;
 
-// Background magnetic field
-const sf::Vector2f externalFieldDirection = normalize({1.0f, 0.2f});
-constexpr float externalFieldStrength = 100.0f;
+// Langevin parameters, in reduced simulation units.
+// Translational Langevin: m dv/dt = F - gammaT v + sqrt(2 gammaT kBT m) eta(t)
+// Rotational Langevin:    I dw/dt = tau - gammaR w + sqrt(2 gammaR kBT I) eta(t)
+constexpr float mass = 1.0f;
+constexpr float momentOfInertia = 1.0f;
+constexpr float gammaT = 1.0f;
+constexpr float gammaR = 4.0f;
+constexpr float initialTemperature = 10.0f;
+constexpr float finalTemperature = 0.35f;
+constexpr float coolingTime = 20.0f;   // simulation time units
 
 // Cell-list parameters. The 3x3 neighbor search is valid when cellSize >= largest cutoff.
 const float cellSize = std::max(ljCutoff, dipoleCutoff);
@@ -44,7 +51,8 @@ struct Particle {
     sf::Vector2f velocity{};
     sf::Vector2f acceleration{};
 
-    // Magnetic moment orientation
+    // Magnetic moment orientation.  The magnetic moment magnitude is absorbed
+    // into dipoleStrength and externalFieldStrength.
     sf::Vector2f magneticMoment{};
     float angle = 0.f;
     float angularVelocity = 0.f;
@@ -61,13 +69,23 @@ float cross2D(sf::Vector2f a, sf::Vector2f b) {
     return a.x * b.y - a.y * b.x;
 }
 
+sf::Vector2f normalize(sf::Vector2f v) {
+    const float len = std::sqrt(dot(v, v));
+    if (len < 1e-8f) return {0.f, 0.f};
+    return v / len;
+}
+
+sf::Vector2f neg(sf::Vector2f v) {
+    return {-v.x, -v.y};
+}
+
 sf::Vector2f momentFromAngle(float angle) {
     return {std::cos(angle), std::sin(angle)};
 }
 
-sf::Vector2f randomUnitVector(std::mt19937& rng) {
-    std::uniform_real_distribution<float> angleDist(0.f, 2.f * PI);
-    return momentFromAngle(angleDist(rng));
+float temperatureAtTime(float t) {
+    // Exponential annealing from initialTemperature to finalTemperature.
+    return finalTemperature + (initialTemperature - finalTemperature) * std::exp(-t / coolingTime);
 }
 
 void applyPBC(sf::Vector2f& pos, float w, float h) {
@@ -144,8 +162,9 @@ void computeForces(std::vector<Particle>& particles) {
         applyPBC(p.position, static_cast<float>(width), static_cast<float>(height));
         p.acceleration = {0.f, 0.f};
 
-        // Include the external field in the same force/torque evaluation as the pair torques.
-        p.angularAcceleration = cross2D(p.magneticMoment, B_ext);
+        // External-field torque tau = mu x B.  Divide by I below by treating
+        // angularAcceleration as alpha, not raw torque.
+        p.angularAcceleration = cross2D(p.magneticMoment, B_ext) / momentOfInertia;
     }
 
     for (int i = 0; i < static_cast<int>(particles.size()); ++i) {
@@ -154,7 +173,7 @@ void computeForces(std::vector<Particle>& particles) {
         grid[cx][cy].push_back(i);
     }
 
-    // Force-shifted LJ scalar. The force vector is r * [scalar - scalar(rc)].
+    // Force-shifted LJ scalar. The LJ force vector is r * [scalar(r) - scalar(rc)].
     const float sr2c = (sigma * sigma) / ljCutoff2;
     const float sr6c = sr2c * sr2c * sr2c;
     const float sr12c = sr6c * sr6c;
@@ -180,7 +199,7 @@ void computeForces(std::vector<Particle>& particles) {
                             const float r2 = dot(r, r);
                             if (r2 < 1e-6f) continue;
 
-                            sf::Vector2f totalForce{0.f, 0.f};
+                            sf::Vector2f totalForceOnP2{0.f, 0.f};
 
                             if (r2 < ljCutoff2) {
                                 const float inv_r2 = 1.f / r2;
@@ -192,29 +211,28 @@ void computeForces(std::vector<Particle>& particles) {
                                     24.f * epsilon * inv_r2 * (2.f * sr12 - sr6)
                                     - ljScalarAtCutoff;
 
-                                totalForce += r * ljScalar;
+                                totalForceOnP2 += r * ljScalar;
                             }
 
                             if (r2 < dipoleCutoff2) {
-                                // Pair force
-                                totalForce += computeDipoleForceOnP2(
+                                // Pair force on p2 due to p1.
+                                totalForceOnP2 += computeDipoleForceOnP2(
                                     r,
                                     p1.magneticMoment,
                                     p2.magneticMoment,
                                     dipoleStrength
                                 );
 
-                                // Pair torques
-                                const sf::Vector2f B_on_1 = dipoleField(-r, p2.magneticMoment, dipoleStrength);
-                                const sf::Vector2f B_on_2 = dipoleField( r, p1.magneticMoment, dipoleStrength);
+                                // Pair torques.
+                                const sf::Vector2f B_on_1 = dipoleField(neg(r), p2.magneticMoment, dipoleStrength);
+                                const sf::Vector2f B_on_2 = dipoleField( r,     p1.magneticMoment, dipoleStrength);
 
-                                p1.angularAcceleration += cross2D(p1.magneticMoment, B_on_1);
-                                p2.angularAcceleration += cross2D(p2.magneticMoment, B_on_2);
+                                p1.angularAcceleration += cross2D(p1.magneticMoment, B_on_1) / momentOfInertia;
+                                p2.angularAcceleration += cross2D(p2.magneticMoment, B_on_2) / momentOfInertia;
                             }
 
-                            // Unit mass is assumed, so force == acceleration.
-                            p1.acceleration -= totalForce;
-                            p2.acceleration += totalForce;
+                            p1.acceleration -= totalForceOnP2 / mass;
+                            p2.acceleration += totalForceOnP2 / mass;
                         }
                     }
                 }
@@ -240,8 +258,29 @@ void integrateSecondHalf(std::vector<Particle>& particles, float dt) {
     for (auto& p : particles) {
         p.velocity += p.acceleration * (0.5f * dt);
         p.angularVelocity += 0.5f * p.angularAcceleration * dt;
-        p.angularVelocity *= rotationalDamping;
         p.magneticMoment = momentFromAngle(p.angle);
+    }
+}
+
+void applyLangevinThermostat(
+    std::vector<Particle>& particles,
+    float dt,
+    float temperature,
+    std::mt19937& rng
+) {
+    std::normal_distribution<float> normal(0.f, 1.f);
+
+    // Exact Ornstein-Uhlenbeck velocity update.  This is the stochastic
+    // friction/noise part of a Langevin splitting scheme.
+    const float cT = std::exp(-gammaT * dt);
+    const float cR = std::exp(-gammaR * dt);
+
+    const float sigmaV = std::sqrt((temperature / mass) * (1.f - cT * cT));
+    const float sigmaW = std::sqrt((temperature / momentOfInertia) * (1.f - cR * cR));
+
+    for (auto& p : particles) {
+        p.velocity = cT * p.velocity + sigmaV * sf::Vector2f(normal(rng), normal(rng));
+        p.angularVelocity = cR * p.angularVelocity + sigmaW * normal(rng);
     }
 }
 
@@ -285,23 +324,26 @@ std::vector<float> computeRadialDistribution(
 }
 
 int main() {
-    sf::RenderWindow window(sf::VideoMode(width, height), "Particle Simulation");
+    sf::RenderWindow window(sf::VideoMode(width, height), "Dipolar Langevin Particle Simulation");
     window.setFramerateLimit(144);
 
     std::vector<Particle> particles;
-    constexpr int N = 1000;
+    constexpr int N = 700;
     particles.reserve(N);
 
     std::mt19937 rng(std::random_device{}());
     std::uniform_real_distribution<float> jitter(-1.0f, 1.0f);
-    std::uniform_real_distribution<float> vel(-100.f, 100.f);
     std::uniform_real_distribution<float> angleDist(0.f, 2.f * PI);
+    std::normal_distribution<float> normal(0.f, 1.f);
 
     // Grid initialization avoids catastrophic LJ overlaps from random placement.
     const int cols = static_cast<int>(std::ceil(std::sqrt(N * static_cast<float>(width) / height)));
     const int rows = static_cast<int>(std::ceil(static_cast<float>(N) / cols));
     const float dx = static_cast<float>(width) / cols;
     const float dy = static_cast<float>(height) / rows;
+
+    const float initVelSigma = std::sqrt(initialTemperature / mass);
+    const float initAngVelSigma = std::sqrt(initialTemperature / momentOfInertia);
 
     for (int i = 0; i < N; ++i) {
         const int ix = i % cols;
@@ -310,21 +352,22 @@ int main() {
         Particle p;
         p.radius = 5.f;
         p.position = {(ix + 0.5f) * dx + jitter(rng), (iy + 0.5f) * dy + jitter(rng)};
-        p.velocity = {vel(rng), vel(rng)};
+        p.velocity = initVelSigma * sf::Vector2f(normal(rng), normal(rng));
         p.angle = angleDist(rng);
-        p.angularVelocity = 10.f;
+        p.angularVelocity = initAngVelSigma * normal(rng);
         p.magneticMoment = momentFromAngle(p.angle);
 
         particles.push_back(p);
     }
+
+    constexpr float dt = 0.01f;
+    float simulationTime = 0.f;
 
     // Initial acceleration for velocity Verlet.
     computeForces(particles);
 
     sf::CircleShape shape;
     shape.setFillColor(sf::Color::White);
-
-    constexpr float dt = 0.001f;
 
     while (window.isOpen()) {
         sf::Event event;
@@ -336,9 +379,14 @@ int main() {
             }
         }
 
+        const float temperature = temperatureAtTime(simulationTime);
+
         integrateFirstHalf(particles, dt);
         computeForces(particles);
         integrateSecondHalf(particles, dt);
+        applyLangevinThermostat(particles, dt, temperature, rng);
+
+        simulationTime += dt;
 
         window.clear();
 
