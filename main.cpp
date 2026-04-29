@@ -13,31 +13,37 @@ constexpr int height = 1080;
 
 // Lennard-Jones parameters.  Keep epsilon modest if you want field-aligned
 // dipolar chains rather than isotropic LJ droplets.
-constexpr float epsilon = 0.5f;
-constexpr float sigma   = 10.0f;
+constexpr float epsilon = 0.1f;
+constexpr float sigma   = 5.0f;
 constexpr float ljCutoff = 2.5f * sigma;
 constexpr float ljCutoff2 = ljCutoff * ljCutoff;
 
 // Dipolar interaction parameters.  The strength must be large enough that
 // |U_dd| near contact is several kBT; otherwise thermal noise breaks chains.
-constexpr float dipoleStrength = 3000.0f;
+constexpr float dipoleStrength = 4000.0f;
 constexpr float dipoleCutoff = 8.0f * sigma;
 constexpr float dipoleCutoff2 = dipoleCutoff * dipoleCutoff;
 
-// External magnetic field
+// External magnetic field.
+// The field can be changed interactively: left-click and drag.
+// Drag direction = field direction; drag length = field strength.
 sf::Vector2f normalize(sf::Vector2f v);
-const sf::Vector2f externalFieldDirection = normalize({1.0f, 0.0f});
-constexpr float externalFieldStrength = 1000.0f;
+float length(sf::Vector2f v);
+sf::Vector2f externalFieldDirection = normalize({1.0f, 0.2f});
+float externalFieldStrength = 100.0f;
+constexpr float fieldStrengthPerPixel = 1.0f;
+constexpr float maxExternalFieldStrength = 1000.0f;
+constexpr float minDragLengthForField = 2.0f;
 
 // Langevin parameters, in reduced simulation units.
 // Translational Langevin: m dv/dt = F - gammaT v + sqrt(2 gammaT kBT m) eta(t)
 // Rotational Langevin:    I dw/dt = tau - gammaR w + sqrt(2 gammaR kBT I) eta(t)
-constexpr float mass = 1.0f;
-constexpr float momentOfInertia = 1.0f;
+constexpr float mass = 0.5f;
+constexpr float momentOfInertia = 0.5f;
 constexpr float gammaT = 1.0f;
 constexpr float gammaR = 4.0f;
-constexpr float initialTemperature = 10.0f;
-constexpr float finalTemperature = 0.35f;
+constexpr float initialTemperature = 50.0f;
+constexpr float finalTemperature = 0.1f;
 constexpr float coolingTime = 20.0f;   // simulation time units
 
 // Cell-list parameters. The 3x3 neighbor search is valid when cellSize >= largest cutoff.
@@ -63,6 +69,10 @@ struct Particle {
 
 float dot(sf::Vector2f a, sf::Vector2f b) {
     return a.x * b.x + a.y * b.y;
+}
+
+float length(sf::Vector2f v) {
+    return std::sqrt(dot(v, v));
 }
 
 float cross2D(sf::Vector2f a, sf::Vector2f b) {
@@ -328,7 +338,7 @@ int main() {
     window.setFramerateLimit(144);
 
     std::vector<Particle> particles;
-    constexpr int N = 700;
+    constexpr int N = 5000;
     particles.reserve(N);
 
     std::mt19937 rng(std::random_device{}());
@@ -350,7 +360,7 @@ int main() {
         const int iy = i / cols;
 
         Particle p;
-        p.radius = 5.f;
+        p.radius = 3.f;
         p.position = {(ix + 0.5f) * dx + jitter(rng), (iy + 0.5f) * dy + jitter(rng)};
         p.velocity = initVelSigma * sf::Vector2f(normal(rng), normal(rng));
         p.angle = angleDist(rng);
@@ -369,6 +379,26 @@ int main() {
     sf::CircleShape shape;
     shape.setFillColor(sf::Color::White);
 
+    bool isDraggingField = false;
+    sf::Vector2f fieldDragStart{0.f, 0.f};
+    sf::Vector2f fieldDragCurrent{0.f, 0.f};
+
+    auto updateExternalFieldFromDrag = [&]() {
+        const sf::Vector2f drag = fieldDragCurrent - fieldDragStart;
+        const float dragLength = length(drag);
+
+        if (dragLength < minDragLengthForField) {
+            externalFieldStrength = 0.f;
+            return;
+        }
+
+        externalFieldDirection = drag / dragLength;
+        externalFieldStrength = std::min(
+            maxExternalFieldStrength,
+            fieldStrengthPerPixel * dragLength
+        );
+    };
+
     while (window.isOpen()) {
         sf::Event event;
         while (window.pollEvent(event)) {
@@ -376,6 +406,20 @@ int main() {
                 window.close();
             } else if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::Escape) {
                 window.close();
+            } else if (event.type == sf::Event::MouseButtonPressed &&
+                       event.mouseButton.button == sf::Mouse::Left) {
+                isDraggingField = true;
+                fieldDragStart = window.mapPixelToCoords({event.mouseButton.x, event.mouseButton.y});
+                fieldDragCurrent = fieldDragStart;
+                updateExternalFieldFromDrag();
+            } else if (event.type == sf::Event::MouseMoved && isDraggingField) {
+                fieldDragCurrent = window.mapPixelToCoords({event.mouseMove.x, event.mouseMove.y});
+                updateExternalFieldFromDrag();
+            } else if (event.type == sf::Event::MouseButtonReleased &&
+                       event.mouseButton.button == sf::Mouse::Left) {
+                fieldDragCurrent = window.mapPixelToCoords({event.mouseButton.x, event.mouseButton.y});
+                updateExternalFieldFromDrag();
+                isDraggingField = false;
             }
         }
 
@@ -403,12 +447,24 @@ int main() {
             window.draw(line, 2, sf::Lines);
         }
 
+        // Field indicator in the upper-left corner. Its length shows the
+        // current field strength relative to maxExternalFieldStrength.
         const sf::Vector2f origin(50.f, 50.f);
+        const float indicatorLength = 120.f * externalFieldStrength / maxExternalFieldStrength;
         const sf::Vertex fieldLine[] = {
             sf::Vertex(origin, sf::Color::Blue),
-            sf::Vertex(origin + externalFieldDirection * 80.f, sf::Color::Blue)
+            sf::Vertex(origin + externalFieldDirection * indicatorLength, sf::Color::Blue)
         };
         window.draw(fieldLine, 2, sf::Lines);
+
+        // While dragging, draw the mouse gesture itself in green.
+        if (isDraggingField) {
+            const sf::Vertex dragLine[] = {
+                sf::Vertex(fieldDragStart, sf::Color::Green),
+                sf::Vertex(fieldDragCurrent, sf::Color::Green)
+            };
+            window.draw(dragLine, 2, sf::Lines);
+        }
 
         window.display();
     }
