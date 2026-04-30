@@ -50,11 +50,6 @@ constexpr float fieldStrengthPerPixel = 20.0f;
 constexpr float maxExternalFieldStrength = 10000.0f;
 constexpr float minDragLengthForField = 2.0f;
 
-<<<<<<< HEAD
-//for temperature and Langevin behavior
-const float temperature = 0.2f;
-const float mass = 1.0f;
-=======
 // Langevin parameters, in reduced simulation units.
 // Translational Langevin: m dv/dt = F - gammaT v + sqrt(2 gammaT kBT m) eta(t)
 // Rotational Langevin:    I dw/dt = tau - gammaR w + sqrt(2 gammaR kBT I) eta(t)
@@ -65,7 +60,6 @@ constexpr float gammaR = 8.0f;
 constexpr float initialTemperature = 10.0f;
 constexpr float finalTemperature = 2.0f;
 constexpr float coolingTime = 20.0f;   // simulation time units
->>>>>>> origin/main
 
 // Cell-list parameters. The 3x3 neighbor search is valid when cellSize >= largest cutoff.
 const float cellSize = std::max(ljCutoff, dipoleCutoff);
@@ -225,24 +219,13 @@ void computeForces(std::vector<Particle>& particles) {
                         for (int j : grid[cx2][cy2]) {
                             if (i >= j) continue;
 
+
                             Particle& p1 = particles[i];
                             Particle& p2 = particles[j];
 
                             sf::Vector2f r = p2.position - p1.position;
                             r = minimumImage(r, static_cast<float>(width), static_cast<float>(height));
 
-<<<<<<< HEAD
-                            //For magnetization vector
-                            sf::Vector2f B_on_1 = dipoleField(-r, p2.magneticMoment, dipoleStrength);
-                            sf::Vector2f B_on_2 = dipoleField( r, p1.magneticMoment, dipoleStrength);
-                            float torque1 = cross2D(p1.magneticMoment, B_on_1);
-                            float torque2 = cross2D(p2.magneticMoment, B_on_2);
-
-                            //p1.angularAcceleration += torque1; //This assumed moment of inertia = 1: angularAcceleration += torque / 1
-                            //p2.angularAcceleration += torque2;
-                            p1.angularAcceleration += torque1 / p1.momentOfInertia;
-                            p2.angularAcceleration += torque2 / p2.momentOfInertia;
-=======
                             const float r2 = dot(r, r);
                             if (r2 < 1e-6f) continue;
 
@@ -260,7 +243,6 @@ void computeForces(std::vector<Particle>& particles) {
 
                                 totalForceOnP2 += r * ljScalar;
                             }
->>>>>>> origin/main
 
                             if (r2 < dipoleCutoff2) {
                                 // Pair force on p2 due to p1.
@@ -279,6 +261,7 @@ void computeForces(std::vector<Particle>& particles) {
                                 p2.angularAcceleration += cross2D(p2.magneticMoment, B_on_2) / momentOfInertia;
                             }
 
+                            //totalForceOnP2 = capVector(totalForceOnP2, maxPairForce);
                             p1.acceleration -= totalForceOnP2 / mass;
                             p2.acceleration += totalForceOnP2 / mass;
                         }
@@ -376,12 +359,8 @@ int main() {
     window.setFramerateLimit(144);
 
     std::vector<Particle> particles;
-<<<<<<< HEAD
 
-    const int N = 100;
-=======
     constexpr int N = 5000;
->>>>>>> origin/main
     particles.reserve(N);
 
     std::mt19937 rng(std::random_device{}());
@@ -405,30 +384,13 @@ int main() {
         Particle p;
         p.radius = particleRadius;
         p.position = {(ix + 0.5f) * dx + jitter(rng), (iy + 0.5f) * dy + jitter(rng)};
-<<<<<<< HEAD
-        //temperature and Langevin behavior
-        p.mass = mass;
-        p.momentOfInertia = 0.5f * p.mass * p.radius * p.radius;
-        //for random distribution of velocities
-        //p.velocity = {vel(rng), vel(rng)};
-        //p.acceleration = {0.f, 0.f};
-        //for temperature and Langevin
-        p.velocity = {velDist(rng), velDist(rng)};
-        p.acceleration = {0.f, 0.f};
-        //magnetic moment
-        p.magneticMoment = randomUnitVector(rng); //magnetization vector
-=======
+
         p.velocity = initVelSigma * sf::Vector2f(normal(rng), normal(rng));
->>>>>>> origin/main
         p.angle = angleDist(rng);
         p.angularVelocity = initAngVelSigma * normal(rng);
         p.magneticMoment = momentFromAngle(p.angle);
-<<<<<<< HEAD
-        p.force = {0.f, 0.f};
-        p.torque = 0.f;
-=======
-
->>>>>>> origin/main
+        //p.force = {0.f, 0.f};
+        //p.torque = 0.f;
         particles.push_back(p);
     }
 
@@ -485,41 +447,6 @@ int main() {
             }
         }
 
-<<<<<<< HEAD
-        // 1. integrate positions + half velocity (Verlet, deactivated when Brownian is used)
-        //integrate(particles, dt);
-        // 2. recompute forces
-        computeForces(particles);
-        // 3. finish velocity update
-
-        brownianStep(particles, dt, rng);
-        brownianRotationStep(particles, dt, rng);
-
-        for (auto& p : particles) {
-            p.velocity += 0.5f * p.acceleration * dt;
-            p.angularVelocity += 0.5f * p.angularAcceleration * dt;
-
-            p.magneticMoment = momentFromAngle(p.angle);
-
-            applyPBC(p.position, width, height);
-        }
-
-        //Background magnetic field
-        sf::Vector2f B_ext = externalFieldStrength * externalFieldDirection;
-        for (auto& p : particles) {
-            float externalTorque = cross2D(p.magneticMoment, B_ext);
-            //magnetic field only
-            //p.angularAcceleration += externalTorque;
-            //magnetic field and temperature
-            p.angularAcceleration += externalTorque / p.momentOfInertia;
-        }
-
-        applyLangevinThermostat(particles, dt, temperature, gammaTrans, rng);
-        applyRotationalLangevinThermostat(particles, dt, temperature, gammaRot, rng);
-        // 4. walls
-        // for (auto& p : particles)
-        //     handleWallCollision(p, window.getSize());
-=======
         const float temperature = temperatureAtTime(simulationTime);
 
         integrateFirstHalf(particles, dt);
@@ -528,7 +455,6 @@ int main() {
         applyLangevinThermostat(particles, dt, temperature, rng);
 
         simulationTime += dt;
->>>>>>> origin/main
 
         window.clear();
 
