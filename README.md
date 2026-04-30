@@ -109,6 +109,9 @@ A simulation of 5000 magnetic particles after 5 minutes and after 15 minutes (LJ
 * C++17
 * SFML
 
+RUn with:
+ g++ -std=c++17   main.cpp simulation.cpp math_utils.cpp mouse_field_controller.cpp renderer.cpp   -lsfml-graphics -lsfml-window -lsfml-system   -o particleSimulation
+
 # Mathematical model
 ## Equations of motion
 ### Translational motion
